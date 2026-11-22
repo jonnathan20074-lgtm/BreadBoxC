@@ -199,6 +199,7 @@ bool sw_gpu_flush = true;
 bool sw_aa;              // test: Old 3DS: gameplay supersampled too
 bool sw_csnd, sw_nonet, sw_nosound, sw_noirrst, sw_noaa, sw_nolcd, sw_nocovers, sw_sfxlog, sw_framelog;
 char sw_presets_url[96];  // test: preset update server (numeric LAN HTTP), check now
+char sw_game[PATH_LEN];     // game=<path>: start this game at once (forwarder; see read_game_file)
 
 extern int psx3d_idle_skip;
 extern int gs_defer, gs_cap_auto;
@@ -211,6 +212,7 @@ static void parse_switches(int argc, char **argv)
 		else if (!strcmp(a, "csnd")) sw_csnd = true;   // test the no-firmware sound path
 		else if (!strncmp(a, "slider=", 7)) sw_slider = strtof(a + 7, NULL);
 		else if (!strncmp(a, "stereo=", 7)) sw_stereo = atoi(a + 7);
+		else if (!strncmp(a, "game=", 5)) snprintf(sw_game, sizeof(sw_game), "%s", a + 5);
 		else if (clip_switch(a)) {}
         else if (bb_system_switch(a)) {}
 		else if (!strcmp(a, "prof")) sw_prof = true;
@@ -328,6 +330,27 @@ float slider_get(void)
 	return sw_slider >= 0 ? sw_slider : osGet3DSliderState();
 }
 
+// Forwarder: the first line of a game.txt is the path of the game to start at once (spaces
+// are fine here). The CIA's own romfs:/game.txt is read first, then the SD card's.
+static bool read_game_file(const char *file)
+{
+	FILE *f = fopen(file, "r");
+	if (!f)
+		return false;
+	char line[PATH_LEN];
+	bool ok = fgets(line, sizeof(line), f) != NULL;
+	fclose(f);
+	if (!ok)
+		return false;
+	size_t n = strlen(line);
+	while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
+		line[--n] = 0;
+	if (!n)
+		return false;
+	snprintf(sw_game, sizeof(sw_game), "%s", line);
+	return true;
+}
+
 // A game starts: the menus' pictures give their memory to it first.
 static char launch_error[384];
 static bool start_game(const char *path, const char *save_name, const char *title)
@@ -360,6 +383,23 @@ static bool start_game(const char *path, const char *save_name, const char *titl
  bb_session_end();
  if(played && result!=BB_RUN_FAILED)room_walls_game_ended(system,path,title);   /* the room's corkboard: this game's new postcards and its ticket */
  return result!=BB_RUN_FAILED;
+}
+
+// The game that starts at once: a forwarder's (game.txt, game=<path>) or a system's test switch.
+// True once a forwarder's game was played: quitting it then leaves for HOME.
+static bool autostart_game(void)
+{
+	if (!sw_game[0] && !read_game_file("romfs:/game.txt"))
+		read_game_file(PSX3D_DIR "/game.txt");
+	bool fwd = sw_game[0] != 0;
+	const char *path = fwd ? sw_game : bb_system_autostart();
+	if (!path)
+		return false;
+	if (start_game(path, NULL, NULL))
+		return fwd;
+	if (fwd)
+		show_error(launch_error);
+	return false;
 }
 
 static u64 boot_t0;
@@ -579,15 +619,14 @@ int main(int argc, char **argv)
 	boot_mark("systems");
 	dev_init();
 	boot_mark("dev");
-    const char *autostart=bb_system_autostart();
-    if(autostart)start_game(autostart,NULL,NULL);
+    bool fwd_done=autostart_game();
 
 	// BreadBox opens to the main menu (home.c). Its Library is the game library
 	// (needs a games folder); Settings > Games folder opens the folder browser,
 	// which is where a games folder gets picked.
 	// first run: look for the games instead of opening the folder browser
     bool use_library = g_cfg.games_dir[0] != 0; // Home opens while the index worker scans.
-#define MAIN_STOP() (!aptMainLoop() || !gspHasGpuRight())
+#define MAIN_STOP() (!aptMainLoop() || !gspHasGpuRight() || fwd_done)
 	bool at_home = true;
 	for (;;) {
 		if (MAIN_STOP()) break;
