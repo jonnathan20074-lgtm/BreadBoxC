@@ -199,7 +199,7 @@ bool sw_gpu_flush = true;
 bool sw_aa;              // test: Old 3DS: gameplay supersampled too
 bool sw_csnd, sw_nonet, sw_nosound, sw_noirrst, sw_noaa, sw_nolcd, sw_nocovers, sw_sfxlog, sw_framelog;
 char sw_presets_url[96];  // test: preset update server (numeric LAN HTTP), check now
-char sw_game[PATH_LEN];     // game=<path>: start this game at once (forwarder; see read_game_file)
+char sw_play[PATH_LEN];     // play=<path>: start this game file at once (forwarder; see read_play_file)
 
 extern int psx3d_idle_skip;
 extern int gs_defer, gs_cap_auto;
@@ -212,7 +212,6 @@ static void parse_switches(int argc, char **argv)
 		else if (!strcmp(a, "csnd")) sw_csnd = true;   // test the no-firmware sound path
 		else if (!strncmp(a, "slider=", 7)) sw_slider = strtof(a + 7, NULL);
 		else if (!strncmp(a, "stereo=", 7)) sw_stereo = atoi(a + 7);
-		else if (!strncmp(a, "game=", 5)) snprintf(sw_game, sizeof(sw_game), "%s", a + 5);
 		else if (clip_switch(a)) {}
         else if (bb_system_switch(a)) {}
 		else if (!strcmp(a, "prof")) sw_prof = true;
@@ -277,6 +276,7 @@ static void parse_switches(int argc, char **argv)
 		else if (!strncmp(a, "cdra=", 5)) snprintf(sw_cdra, sizeof(sw_cdra), "%s", a + 5);
 		else if (!strncmp(a, "clock=", 6)) snprintf(sw_clock, sizeof(sw_clock), "%s", a + 6);
 		else if (!strncmp(a, "game=", 5)) snprintf(sw_game, sizeof(sw_game), "%s", a + 5);
+		else if (!strncmp(a, "play=", 5)) snprintf(sw_play, sizeof(sw_play), "%s", a + 5);
 		else if (!strcmp(a, "nosound")) sw_nosound = true;
 		else if (!strcmp(a, "sfxlog")) sw_sfxlog = true;
 		else if (!strcmp(a, "framelog")) sw_framelog = true;
@@ -330,27 +330,6 @@ float slider_get(void)
 	return sw_slider >= 0 ? sw_slider : osGet3DSliderState();
 }
 
-// Forwarder: the first line of a game.txt is the path of the game to start at once (spaces
-// are fine here). The CIA's own romfs:/game.txt is read first, then the SD card's.
-static bool read_game_file(const char *file)
-{
-	FILE *f = fopen(file, "r");
-	if (!f)
-		return false;
-	char line[PATH_LEN];
-	bool ok = fgets(line, sizeof(line), f) != NULL;
-	fclose(f);
-	if (!ok)
-		return false;
-	size_t n = strlen(line);
-	while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
-		line[--n] = 0;
-	if (!n)
-		return false;
-	snprintf(sw_game, sizeof(sw_game), "%s", line);
-	return true;
-}
-
 // A game starts: the menus' pictures give their memory to it first.
 static char launch_error[384];
 static bool start_game(const char *path, const char *save_name, const char *title)
@@ -385,23 +364,6 @@ static bool start_game(const char *path, const char *save_name, const char *titl
  return result!=BB_RUN_FAILED;
 }
 
-// The game that starts at once: a forwarder's (game.txt, game=<path>) or a system's test switch.
-// True once a forwarder's game was played: quitting it then leaves for HOME.
-static bool autostart_game(void)
-{
-	if (!sw_game[0] && !read_game_file("romfs:/game.txt"))
-		read_game_file(PSX3D_DIR "/game.txt");
-	bool fwd = sw_game[0] != 0;
-	const char *path = fwd ? sw_game : bb_system_autostart();
-	if (!path)
-		return false;
-	if (start_game(path, NULL, NULL))
-		return fwd;
-	if (fwd)
-		show_error(launch_error);
-	return false;
-}
-
 static u64 boot_t0;
 static unsigned boot_seen;   // the table covers the cold start only: closed once the first frame and the music are in it
 static bool boot_closed, boot_logging;
@@ -427,6 +389,44 @@ void boot_mark(const char *what)
 
 // A thread that did not stop (bb_exit_abandoned: a join timed out, or a system left its
 // core running on HOME > Close) must not see anything it can reach freed. libctru's own
+// Forwarder: the first line of a play.txt is the path of the game file to start at once
+// (spaces are fine here). The CIA's own romfs:/play.txt is read first, then the SD card's.
+static bool read_play_file(const char *file)
+{
+	FILE *f = fopen(file, "r");
+	if (!f)
+		return false;
+	char line[PATH_LEN];
+	bool ok = fgets(line, sizeof(line), f) != NULL;
+	fclose(f);
+	if (!ok)
+		return false;
+	size_t n = strlen(line);
+	while (n && (line[n - 1] == '\n' || line[n - 1] == '\r' || line[n - 1] == ' '))
+		line[--n] = 0;
+	if (!n)
+		return false;
+	snprintf(sw_play, sizeof(sw_play), "%s", line);
+	return true;
+}
+
+// The game that starts at once: a forwarder's (play.txt, play=<path>) or a system's test switch.
+// True once a forwarder's game was played: quitting it then leaves for HOME.
+static bool autostart_game(void)
+{
+	if (!sw_play[0] && !read_play_file("romfs:/play.txt"))
+		read_play_file(PSX3D_DIR "/play.txt");
+	bool fwd = sw_play[0] != 0;
+	const char *path = fwd ? sw_play : bb_system_autostart();
+	if (!path)
+		return false;
+	if (start_game(path, NULL, NULL))
+		return fwd;
+	if (fwd)
+		show_error(launch_error);
+	return false;
+}
+
 // exit after main returns frees plenty before it ends the process: __appExit's service
 // teardown (archiveUnmountAll, fsExit, hidExit, aptExit joining APT's thread, srvExit),
 // then __libctru_exit's two whole-heap unmaps (the crash after the 16424 update: the NDSP
