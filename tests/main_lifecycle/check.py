@@ -8,7 +8,7 @@ import os, subprocess, tempfile
 root=Path(__file__).resolve().parents[2]
 s=(root/'app/ui/main.c').read_text()
 assert s.count('if (MAIN_STOP()) break;') == 13
-assert s.count('#define MAIN_STOP() (!aptMainLoop() || !gspHasGpuRight())') == 1
+assert s.count('#define MAIN_STOP() (!aptMainLoop() || !gspHasGpuRight() || fwd_done)') == 1
 a=s.index('#define MAIN_STOP()'); b=s.index('\n    if(bb_update_committed())',a)
 loop=s[a:b]
 prefix=r'''
@@ -28,6 +28,7 @@ static char sw_game[64],launch_error[64];
 static int scenario, entries, reloads, browsers, scans;
 static bool closed, gpu;
 static int startup_mode;
+static bool fwd_done;
 static bool aptMainLoop(void){return !closed;}
 static bool gspHasGpuRight(void){return gpu;}
 static bool aptShouldClose(void){return closed;}
